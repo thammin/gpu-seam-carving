@@ -1,7 +1,7 @@
 # GPU Seam Carving with Compute Shader
 
-![](./Documentation~/DemoEnergyMap.png)
-![](./Documentation~/Demo.gif)
+![](./Documentation/DemoEnergyMap.png)
+![](./Documentation/Demo.gif)
 
 An experiment to implement Seam Carving with compute shader. The algorithm is based on [this paper](https://pacman.cs.tsinghua.edu.cn/~cwg/papers_cwg/icpads14.pdf), which calculate non-cumulative energy between pixels parallelly. The calculated seam is not optimal but could be performs in very short time.
 
