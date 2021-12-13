@@ -1,0 +1,141 @@
+#pragma kernel CalculateEnergy
+#pragma kernel CalculateIndexMap
+#pragma kernel CalculateEnergySum
+#pragma kernel FindOptimalSeam
+#pragma kernel ResizeResult
+#pragma kernel DrawSeam
+
+uint SizeX;
+uint SizeY;
+uint EnergySumStep;
+bool ShowEnergyMap;
+
+RWTexture2D<float4> Result;
+RWStructuredBuffer<uint2> EnergyMap; // (energyMap, indexMap)
+RWStructuredBuffer<uint2> SumOffset; // (sumEnergyMap, offsetMap)
+RWStructuredBuffer<uint> OptimalSeam;
+
+uint GetEnergy(in uint2 from, in uint2 to)
+{
+    float4 f = Result[from];
+    float4 t = Result[to];
+    uint3 d = uint3((f.r - t.r) * 256, (f.g - t.g) * 256, (f.b - t.b) * 256);
+    return d.r * d.r + d.g * d.g + d.b * d.b;
+}
+
+[numthreads(32, 32, 1)]
+void CalculateEnergy(uint3 id: SV_DispatchThreadID)
+{
+    uint energy = 0;
+
+    if (id.x > 0) energy += GetEnergy(uint2(id.x - 1, id.y), id.xy); // l
+    if (id.y > 0) energy += GetEnergy(uint2(id.x, id.y - 1), id.xy); // b
+    if (id.x < SizeX - 1) energy += GetEnergy(uint2(id.x + 1, id.y), id.xy); // r
+    if (id.y < SizeY - 1) energy += GetEnergy(uint2(id.x, id.y + 1), id.xy); // t
+    if (id.x > 0 && id.y > 0) energy += GetEnergy(uint2(id.x - 1, id.y - 1), id.xy); // lb
+    if (id.x > 0 && id.y < SizeY - 1) energy += GetEnergy(uint2(id.x - 1, id.y + 1), id.xy); // lt
+    if (id.x < SizeX - 1 && id.y > 0) energy += GetEnergy(uint2(id.x + 1, id.y - 1), id.xy); // rb
+    if (id.x < SizeX - 1 && id.y < SizeY - 1) energy += GetEnergy(uint2(id.x + 1, id.y + 1), id.xy); // rt
+    
+    energy = (uint)(sqrt(energy) / 8);
+    
+    uint index = id.x + id.y * SizeX;
+    EnergyMap[index].x = energy;
+    SumOffset[index].x = energy;
+    
+    if (ShowEnergyMap)
+    {
+        Result[id.xy] = float4(energy / 256.0, energy / 256.0, energy / 256.0, 1);
+    }
+}
+
+[numthreads(32, 32, 1)]
+void CalculateIndexMap(uint3 id: SV_DispatchThreadID)
+{
+    if (id.x >= SizeX) return;
+
+    uint index = id.x + id.y * SizeX;
+
+    uint leftIndex = (id.x - 1) + (id.y + 1) * SizeX;
+    uint middleIndex = (id.x) + (id.y + 1) * SizeX;
+    uint rightIndex = (id.x + 1) + (id.y + 1) * SizeX;
+
+    uint leftEnergy = id.x == 0 ? -1 : EnergyMap[leftIndex].x;
+    uint middleEnergy = EnergyMap[middleIndex].x;
+    uint rightEnergy = id.x == SizeX - 1 ? -1 : EnergyMap[rightIndex].x;
+
+    uint resultIndex = 0;
+    if (middleEnergy < rightEnergy)
+    {
+        resultIndex = middleEnergy < leftEnergy ? middleIndex : leftIndex;
+    }
+    else
+    {
+        resultIndex = rightEnergy < leftEnergy ? rightIndex : leftIndex;
+    }
+
+    EnergyMap[index].y = resultIndex;
+    SumOffset[index].y = resultIndex;
+}
+
+[numthreads(1, 128, 1)]
+void CalculateEnergySum(uint3 id: SV_DispatchThreadID)
+{
+    if (id.y % (1 << EnergySumStep) == 0)
+    {
+        for (uint x = 0; x < SizeX; x++)
+        {
+            uint index = x + id.y * SizeX;
+            uint offset = SumOffset[index].y;
+            SumOffset[index].x += SumOffset[offset].x;
+            SumOffset[index].y = SumOffset[offset].y;
+        }
+    }
+}
+
+[numthreads(1, 1, 1)]
+void FindOptimalSeam(uint3 id: SV_DispatchThreadID)
+{
+    uint energy = SumOffset[0].x;
+    uint index = 0;
+    
+    for (uint x = 0; x < SizeX; x++)
+    {
+        if (SumOffset[x].x < energy)
+        {
+            index = x;
+            energy = SumOffset[x].x;
+        }
+    }
+
+    for (uint y = 0; y < SizeY; y++)
+    {
+        OptimalSeam[y] = index;
+        index = EnergyMap[index].y;
+    }
+}
+
+[numthreads(1, 128, 1)]
+void DrawSeam(uint3 id: SV_DispatchThreadID)
+{
+    uint index = OptimalSeam[id.y];
+    uint indexX = index % SizeX;
+
+    Result[uint2(indexX, id.y)] = float4(1, 1, 1, 1);
+}
+
+[numthreads(1, 128, 1)]
+void ResizeResult(uint3 id: SV_DispatchThreadID)
+{
+    uint index = OptimalSeam[id.y];
+    uint indexX = index % SizeX;
+
+    for (uint x = indexX; x < SizeX - 1; x++)
+    {
+        uint2 current = uint2(x, id.y);
+        uint2 next = uint2(x + 1, id.y);
+        Result[current] = Result[next];
+    }
+    
+    Result[uint2(SizeX - 1, id.y)] = float4(0, 0, 0, 0);
+}
